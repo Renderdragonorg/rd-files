@@ -7,9 +7,9 @@ import (
 	"os"
 	"regexp"
 
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
-	_ "github.com/glebarez/go-sqlite"
 )
 
 var db *sql.DB
@@ -42,7 +42,7 @@ func initDB() {
 	}
 
 	// SQLite driver creates the database file as long as its parent directory exists
-	if db, err = sql.Open("sqlite3", "db/main.db"); err != nil {
+	if db, err = sql.Open("sqlite", "db/main.db"); err != nil {
 		logger.Fatal("Error opening database:", err.Error())
 	}
 	if err = db.Ping(); err != nil {
