@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,19 +34,83 @@ type ListResponseBody struct {
 var args = parseArgs()
 var client = &http.Client{Timeout: 30 * time.Second}
 
-var version = "v1.0.0"
+var version = "v1.0.1"
 var apiUrl = "https://files.eulm.dev"
 
 func parseArgs() []string {
 	var validArgs []string
 
-	for _, arg := range os.Args[1:] {
-		if !strings.HasPrefix(arg, "-") {
-			validArgs = append(validArgs, arg)
+	for i, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "-") {
+			continue
 		}
+
+		if len(arg) > 0 && (arg[0] == '"' || arg[0] == '\'') {
+			quote := arg[0]
+			if len(arg) >= 2 && arg[len(arg)-1] == quote && !isEscaped(arg, len(arg)-1) {
+				if unq, err := strconv.Unquote(arg); err == nil {
+					validArgs = append(validArgs, strings.TrimSpace(unq))
+				} else {
+					validArgs = append(validArgs, strings.TrimSpace(arg[1:len(arg)-1]))
+				}
+				continue
+			}
+
+			parts := []string{arg}
+			j := i + 1
+			found := false
+			for j < len(os.Args) {
+				parts = append(parts, os.Args[j])
+				last := os.Args[j]
+				if len(last) > 0 && last[len(last)-1] == quote && !isEscaped(last, len(last)-1) {
+					found = true
+					break
+				}
+				j++
+			}
+
+			joined := strings.Join(parts, " ")
+			if !strings.HasPrefix(joined, string(quote)) {
+				joined = string(quote) + joined
+			}
+			if !strings.HasSuffix(joined, string(quote)) {
+				joined = joined + string(quote)
+			}
+
+			if unq, err := strconv.Unquote(joined); err == nil {
+				validArgs = append(validArgs, strings.TrimSpace(unq))
+			} else {
+				s := joined
+				if len(s) >= 2 && s[0] == quote && s[len(s)-1] == quote {
+					s = s[1 : len(s)-1]
+				}
+				validArgs = append(validArgs, strings.TrimSpace(s))
+			}
+
+			if found {
+				i = j + 1
+			} else {
+				i = len(os.Args)
+			}
+			continue
+		}
+
+		validArgs = append(validArgs, strings.TrimSpace(arg))
 	}
 
 	return validArgs
+}
+
+func isEscaped(s string, pos int) bool {
+	count := 0
+	for i := pos - 1; i >= 0; i-- {
+		if s[i] == '\\' {
+			count++
+		} else {
+			break
+		}
+	}
+	return count%2 == 1
 }
 
 func printHelp() {
@@ -150,16 +215,17 @@ func uploadCmd() {
 		}
 	}(res)
 
-	if res.StatusCode == http.StatusCreated {
+	switch res.StatusCode {
+	case http.StatusCreated:
 		var resBody UploadResponseBody
 		if err = json.NewDecoder(res.Body).Decode(&resBody); err != nil {
 			fmt.Println("Error parsing response body")
 			return
 		}
 		fmt.Printf("File uploaded successfully to %s/%s\n", apiUrl, resBody.Id)
-	} else if res.StatusCode == http.StatusUnauthorized {
+	case http.StatusUnauthorized:
 		fmt.Println("Invalid API key or insufficient permissions")
-	} else {
+	default:
 		fmt.Println("Error uploading file")
 	}
 }
@@ -204,13 +270,14 @@ func deleteCmd() {
 		}
 	}(res)
 
-	if res.StatusCode == http.StatusOK {
+	switch res.StatusCode {
+	case http.StatusOK:
 		fmt.Println("File deleted successfully")
-	} else if res.StatusCode == http.StatusNotFound {
+	case http.StatusNotFound:
 		fmt.Println("File not found")
-	} else if res.StatusCode == http.StatusUnauthorized {
+	case http.StatusUnauthorized:
 		fmt.Println("Invalid API key or insufficient permissions")
-	} else {
+	default:
 		fmt.Println("Error deleting file")
 	}
 }
@@ -248,7 +315,8 @@ func listCmd() {
 		}
 	}(res)
 
-	if res.StatusCode == http.StatusOK {
+	switch res.StatusCode {
+	case http.StatusOK:
 		var resBody ListResponseBody
 		if err = json.NewDecoder(res.Body).Decode(&resBody); err != nil {
 			fmt.Println("Error parsing response body")
@@ -296,26 +364,31 @@ func listCmd() {
 			return s + padding
 		}
 
-		fmt.Printf(
-			"\n%s %s %s %s\n", extendStr("Name", nameLen), extendStr("Creator", creatorLen),
-			extendStr("Uploaded at", uploadedLen), extendStr("URL", urlLen),
-		)
+		nameSep := strings.Repeat("─", nameLen+2)
+		creatorSep := strings.Repeat("─", creatorLen+2)
+		uploadedSep := strings.Repeat("─", uploadedLen+2)
+		urlSep := strings.Repeat("─", urlLen+2)
 
+		fmt.Printf(
+			"\n┌%s┬%s┬%s┬%s┐\n│ %s │ %s │ %s │ %s │\n",
+			nameSep, creatorSep, uploadedSep, urlSep,
+			extendStr("Name", nameLen), extendStr("Creator", creatorLen), extendStr("Uploaded at", uploadedLen), extendStr("URL", urlLen),
+		)
 		for _, file := range resBody.Files {
 			fileUrl, err := url.JoinPath(apiUrl, "/"+file.Id)
 			if err != nil {
 				fmt.Println("Error constructing URL")
 			}
 			fmt.Printf(
-				"%s %s %s %s\n", extendStr(file.Name, nameLen), extendStr(file.Creator, creatorLen),
-				extendStr(file.UploadedAt, uploadedLen), extendStr(fileUrl, urlLen),
+				"├%s┼%s┼%s┼%s┤\n│ %s │ %s │ %s │ %s │\n",
+				nameSep, creatorSep, uploadedSep, urlSep,
+				extendStr(file.Name, nameLen), extendStr(file.Creator, creatorLen), extendStr(file.UploadedAt, uploadedLen), extendStr(fileUrl, urlLen),
 			)
 		}
-
-		fmt.Println()
-	} else if res.StatusCode == http.StatusUnauthorized {
+		fmt.Printf("└%s┴%s┴%s┴%s┘\n\n", nameSep, creatorSep, uploadedSep, urlSep)
+	case http.StatusUnauthorized:
 		fmt.Println("Invalid API key or insufficient permissions")
-	} else {
+	default:
 		fmt.Println("Error fetching files")
 	}
 }
